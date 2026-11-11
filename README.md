@@ -4,6 +4,10 @@
 
 This was the first module of my master's project on exploded views of CAD assemblies. It is kept as a simple, self-contained service: upload a STEP file, get the parts with their geometry and an exploded layout to display.
 
+![Generated bracket sample, assembled and after the radial explosion, in the web viewer](docs/bracket_assembled_exploded.png)
+
+*Generated `bracket` sample (4 parts, `python -m step_explode.samples`), rendered by the built-in three.js viewer. On the left the assembled state, on the right the radial explosion with factor 1.0. The viewer's slider moves between the two.*
+
 > The radial explosion **does not check for interference**. Nested or coaxial parts (a cover on a shaft, a pin in a hole) usually still collide after it. For a geometric check and repair, see [cad-exploded-view-verifier](https://github.com/ayoub-elkhader/cad-exploded-view-verifier).
 
 ## How it works
