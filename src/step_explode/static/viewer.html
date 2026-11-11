@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STEP Exploded View</title>
+<style>
+  :root { --bg:#0f1117; --panel:#171a23; --text:#e6e8ee; --muted:#8a90a2; --accent:#6ee7f7; --border:#2a2f3d; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.4 system-ui, sans-serif; background:var(--bg); color:var(--text); display:flex; height:100vh; }
+  #panel { width:300px; padding:16px; background:var(--panel); border-right:1px solid var(--border); overflow:auto; }
+  #view { flex:1; position:relative; }
+  canvas { display:block; width:100%; height:100%; }
+  h1 { font-size:16px; margin:0 0 12px; }
+  label { display:block; color:var(--muted); margin:14px 0 4px; font-size:12px; }
+  input[type=range] { width:100%; }
+  button { background:var(--accent); color:#0f1117; border:0; border-radius:4px; padding:7px 12px; cursor:pointer; font-weight:600; }
+  button:disabled { opacity:.5; cursor:default; }
+  #status { color:var(--muted); font-size:12px; margin-top:10px; min-height:1.4em; }
+  ul { list-style:none; padding:0; margin:0; font-size:12px; }
+  li { padding:3px 0; display:flex; gap:6px; align-items:center; }
+  .sw { width:10px; height:10px; border-radius:2px; display:inline-block; }
+  .note { color:var(--muted); font-size:11px; margin-top:16px; }
+  @media (max-width: 700px) { body { flex-direction:column; } #panel { width:auto; border-right:0; } #view { height:60vh; } }
+</style>
+</head>
+<body>
+<div id="panel">
+  <h1>STEP exploded view</h1>
+  <label for="file">STEP file (.step / .stp)</label>
+  <input id="file" type="file" accept=".step,.stp">
+  <label for="factor">Explosion factor: <span id="fv">2.5</span></label>
+  <input id="factor" type="range" min="0" max="6" step="0.1" value="2.5">
+  <div style="margin-top:10px"><button id="go" disabled>Upload and explode</button></div>
+  <label for="t">Assembled &harr; exploded</label>
+  <input id="t" type="range" min="0" max="1" step="0.01" value="1">
+  <div id="status"></div>
+  <label>Components</label>
+  <ul id="list"></ul>
+  <p class="note">Radial explosion only: parts are not checked for interference.</p>
+</div>
+<div id="view"><canvas id="c"></canvas></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const canvas = $('c');
+const renderer = new THREE.WebGLRenderer({canvas, antialias:true});
+renderer.setPixelRatio(window.devicePixelRatio);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1117);
+const camera = new THREE.PerspectiveCamera(45, 1, 0.1, 1e6);
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const sun = new THREE.DirectionalLight(0xffffff, 0.8); sun.position.set(1, 2, 1.5); scene.add(sun);
+const fill = new THREE.DirectionalLight(0xffffff, 0.3); fill.position.set(-1, -1, -1); scene.add(fill);
+
+// minimal orbit control
+let sph = {theta:0.8, phi:1.0, r:300}, target = new THREE.Vector3(), drag = null;
+function placeCamera() {
+  camera.position.set(target.x + sph.r*Math.sin(sph.phi)*Math.cos(sph.theta),
+                      target.y + sph.r*Math.cos(sph.phi),
+                      target.z + sph.r*Math.sin(sph.phi)*Math.sin(sph.theta));
+  camera.lookAt(target);
+}
+canvas.addEventListener('pointerdown', e => { drag = {x:e.clientX, y:e.clientY}; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerup', () => drag = null);
+canvas.addEventListener('pointermove', e => {
+  if (!drag) return;
+  sph.theta -= (e.clientX - drag.x) * 0.005;
+  sph.phi = Math.min(Math.PI - 0.05, Math.max(0.05, sph.phi + (e.clientY - drag.y) * 0.005));
+  drag = {x:e.clientX, y:e.clientY}; placeCamera();
+});
+canvas.addEventListener('wheel', e => { sph.r *= 1 + e.deltaY * 0.001; placeCamera(); e.preventDefault(); }, {passive:false});
+
+function resize() {
+  const w = canvas.clientWidth, h = canvas.clientHeight;
+  renderer.setSize(w, h, false); camera.aspect = w / h; camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+
+// glTF produced by this API: embedded buffer, one mesh per node
+function decode(gltf) {
+  const bin = atob(gltf.buffers[0].uri.split(',')[1]);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  const view = (acc, Type) => {
+    const a = gltf.accessors[acc], bv = gltf.bufferViews[a.bufferView];
+    const n = {VEC3:3, SCALAR:1}[a.type] * a.count;
+    return new Type(buf.buffer.slice(bv.byteOffset, bv.byteOffset + n * Type.BYTES_PER_ELEMENT));
+  };
+  return gltf.nodes.map(node => {
+    const m = gltf.meshes[node.mesh], p = m.primitives[0];
+    const ia = gltf.accessors[p.indices];
+    return {
+      name: node.name,
+      pos: view(p.attributes.POSITION, Float32Array),
+      nrm: view(p.attributes.NORMAL, Float32Array),
+      idx: view(p.indices, ia.componentType === 5123 ? Uint16Array : Uint32Array),
+      t: new THREE.Vector3(...node.translation),
+      color: gltf.materials[p.material].pbrMetallicRoughness.baseColorFactor,
+    };
+  });
+}
+
+let parts = [];
+function build(asm, exp) {
+  parts.forEach(p => scene.remove(p.mesh)); parts = [];
+  const box = new THREE.Box3();
+  $('list').innerHTML = '';
+  asm.forEach((a, i) => {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(a.pos, 3));
+    g.setAttribute('normal', new THREE.BufferAttribute(a.nrm, 3));
+    g.setIndex(new THREE.BufferAttribute(a.idx, 1));
+    const c = new THREE.Color(a.color[0], a.color[1], a.color[2]);
+    const mesh = new THREE.Mesh(g, new THREE.MeshPhongMaterial({color:c, side:THREE.DoubleSide}));
+    scene.add(mesh);
+    parts.push({mesh, a:a.t, e:exp[i].t});
+    g.computeBoundingBox();
+    box.union(g.boundingBox.clone().translate(a.t)).union(g.boundingBox.clone().translate(exp[i].t));
+    const li = document.createElement('li');
+    li.innerHTML = `<span class="sw" style="background:#${c.getHexString()}"></span>${a.name}`;
+    $('list').appendChild(li);
+  });
+  box.getCenter(target);
+  sph.r = box.getSize(new THREE.Vector3()).length() * 1.2 || 100;
+  placeCamera(); apply();
+}
+function apply() {
+  const t = parseFloat($('t').value);
+  parts.forEach(p => p.mesh.position.lerpVectors(p.a, p.e, t));
+}
+$('t').addEventListener('input', apply);
+$('factor').addEventListener('input', () => $('fv').textContent = $('factor').value);
+$('file').addEventListener('change', () => $('go').disabled = !$('file').files.length);
+
+let job = null;
+async function call(url, opts) {
+  const r = await fetch(url, opts);
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+$('go').addEventListener('click', async () => {
+  $('go').disabled = true;
+  try {
+    $('status').textContent = 'Uploading and parsing...';
+    const fd = new FormData(); fd.append('file', $('file').files[0]);
+    const up = await call('/api/upload', {method:'POST', body:fd});
+    job = up.job_id;
+    await explode();
+  } catch (e) { $('status').textContent = 'Error: ' + e.message; }
+  $('go').disabled = false;
+});
+async function explode() {
+  $('status').textContent = 'Computing exploded view...';
+  const res = await call(`/api/jobs/${job}/explode?factor=${$('factor').value}`, {method:'POST'});
+  const [ga, ge] = await Promise.all(['assembled', 'exploded'].map(k => call(`/api/jobs/${job}/gltf/${k}`)));
+  build(decode(ga), decode(ge));
+  $('status').textContent = `${res.nb_components} components, factor ${res.explode_factor}`;
+}
+$('factor').addEventListener('change', () => { if (job) explode().catch(e => $('status').textContent = 'Error: ' + e.message); });
+
+resize(); placeCamera();
+(function loop() { renderer.render(scene, camera); requestAnimationFrame(loop); })();
+</script>
+</body>
+</html>

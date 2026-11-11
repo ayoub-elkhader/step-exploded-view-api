@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "step-exploded-view-api"
+version = "0.1.0"
+description = "REST API and viewer for radial exploded views of STEP assemblies"
+readme = "README.md"
+license = { text = "MIT" }
+authors = [{ name = "Ayoub Elkhader" }]
+requires-python = ">=3.10"
+# pythonocc-core is distributed through conda-forge only; see environment.yml.
+dependencies = ["fastapi>=0.110", "uvicorn>=0.27", "python-multipart>=0.0.9"]
+
+[project.optional-dependencies]
+test = ["pytest>=7", "httpx>=0.27"]
+
+[project.scripts]
+step-explode = "step_explode.cli:main"
+
+[project.urls]
+Repository = "https://github.com/ayoub-elkhader/step-exploded-view-api"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+step_explode = ["static/*.html"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
